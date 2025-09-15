@@ -1,45 +1,43 @@
 [project]
 name = "ghpypi"
-version = "0.0.0"  # DO NOT CHANGE -- set during build
+version = "0.0.0"
 description = "A custom package index generator."
-authors = [{name = "Paul Lockaby", email = "paul@paullockaby.com"}]
-readme = "README.md"
-license-files = ["LICENSE"]
+authors = [{ name = "Paul Lockaby", email = "paul@paullockaby.com" }]
 requires-python = ">=3.9"
-dynamic = ["dependencies"]
+readme = "README.md"
+dependencies = [
+    "PyGithub>=2.1.1",
+    "distlib>=0.4.0",
+    "Jinja2>=3.1.2",
+    "packaging>=25.0",
+    "atomicwrites>=1.4.1",
+    "requests>=2.31.0",
+]
+license-files = ["LICENSE"]
 
 [project.scripts]
 ghpypi = "ghpypi:main"
 
-[tool.poetry]
-packages = [{include = "ghpypi", from = "src"}]
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=7.0.0",
+    "pytest-mock>=3.11.1",
+    "pytest-mypy>=1.0.1",
+    "types-requests>=2.31.0.8",
+    "types-atomicwrites>=1.4.5.1",
+    "responses>=0.25.0",
+]
 
-# these are deprecated but necessary for dependabot
-name = "ghpypi"
-version = "0.0.0"  # DO NOT CHANGE -- set during build
-description = "A custom package index generator."
-authors = ["Paul Lockaby <paul@paullockaby.com>"]
+[tool.hatch.build.targets.sdist]
+include = ["src/ghpypi"]
 
-[tool.poetry.dependencies]
-python = "^3.12"
-PyGithub = "^2.1.1"
-distlib = "^0.4.0"
-Jinja2 = "^3.1.2"
-packaging = "^25.0"
-atomicwrites = "^1.4.1"
-requests = "^2.31.0"
+[tool.hatch.build.targets.wheel]
+include = ["src/ghpypi"]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.0.0"
-pytest-cov = "^7.0.0"
-pytest-mock = "^3.11.1"
-pytest-mypy = "^1.0.1"
-
-# mypy dependencies
-types-requests = "^2.31.0.8"
-types-atomicwrites = "^1.4.5.1"
-responses = "^0.25.0"
+[tool.hatch.build.targets.wheel.sources]
+"src/ghpypi" = "ghpypi"
 
 [build-system]
-requires = ["poetry-core>=2.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
