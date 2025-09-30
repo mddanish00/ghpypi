@@ -4,11 +4,9 @@ import os
 from datetime import datetime
 from pathlib import PosixPath
 
-import github
 import packaging.version
 import pytest
-import responses
-from pytest_mock import MockerFixture
+from aiohttp import ClientSession
 
 from ghpypi import ghpypi
 from ghpypi.ghpypi import Artifact, Package
@@ -129,7 +127,7 @@ def test_load_repositories(tmp_path: PosixPath):
         # this is a comment
         foo/bar
         baz/bat
-    """,
+    """
     )
 
     tmp_data_path = str(tmp_data)
@@ -147,7 +145,7 @@ def test_load_duplicate_repositories(tmp_path: PosixPath):
         # these have the same name but are in different projects
         foo/bar
         baz/bar
-    """,
+    """
     )
 
     tmp_data_path = str(tmp_data)
@@ -179,7 +177,7 @@ def test_load_bad_repositories(tmp_path: PosixPath, data: str):
         list(ghpypi.load_repositories(tmp_data_path))
 
 
-def test_github_tokens(mocker: MockerFixture):
+def test_github_tokens(mocker):
     # save the original environment before we use it
     original_environ = os.environ.get
 
@@ -241,75 +239,32 @@ def test_github_tokens(mocker: MockerFixture):
         ghpypi.get_github_token(None, False)
 
 
-def test_get_artifacts(mocker: MockerFixture):
-    # fake our access to github
-    token = "abcdefghijklmnopqrstuvwxyz1234567890"  # noqa
+@pytest.mark.asyncio
+async def test_get_artifacts(aresponses):
     repository = ghpypi.Repository("paullockaby", "ghpypi")
-
-    # test releases returning nothing ... here is what we're doing here:
-    # our code needs to get a repository from a "github.Github" class which
-    # is actually "github.MainClass.Github". So we're going to patch the
-    # "get_repo" function on "github.MainClass.Github" class. we're going to
-    # make it return a second mock that imitates a "github.Repository.Repository"
-    # object implements the "get_releases" function and makes it return an
-    # empty list. that is all.
-    mock_get_repo = mocker.Mock(
-        spec=github.Repository.Repository,
-        **{
-            "get_releases.return_value": [],
-        },
+    aresponses.add(
+        "api.github.com",
+        f"/repos/{repository.owner}/{repository.name}/releases",
+        "get",
+        [],
     )
-    mocker.patch("github.MainClass.Github.get_repo", return_value=mock_get_repo)
-    releases = list(ghpypi.get_artifacts(token, repository))
-    assert len(releases) == 0
 
-    # test releases returning something with no asset keyword.
-    # much like the last example, except that when we call "get_releases" on
-    # the "github.Repository.Repository" class, we need it to return another
-    # mock that implements "github.GitRelease.GitRelease" and then we want to
-    # mock the "raw_data" function and have it return an empty dict.
-    mock_get_repo = mocker.Mock(
-        spec=github.Repository.Repository,
-        **{
-            "get_releases.return_value": [
-                mocker.Mock(
-                    spec=github.GitRelease.GitRelease,
-                    **{
-                        "raw_data": {},
-                    },
-                ),
-            ],
-        },
-    )
-    mocker.patch("github.MainClass.Github.get_repo", return_value=mock_get_repo)
-    releases = list(ghpypi.get_artifacts(token, repository))
-    assert len(releases) == 0
-
-    # test releases returning something with no assets.
-    # this is exactly like the last example, except that we are putting things
-    # into the dict that is being returned when "raw_data" is called.
-    mock_get_repo = mocker.Mock(
-        spec=github.Repository.Repository,
-        **{
-            "get_releases.return_value": [
-                mocker.Mock(
-                    spec=github.GitRelease.GitRelease,
-                    **{
-                        "raw_data": {"assets": []},
-                    },
-                ),
-            ],
-        },
-    )
-    mocker.patch("github.MainClass.Github.get_repo", return_value=mock_get_repo)
-    releases = list(ghpypi.get_artifacts(token, repository))
-    assert len(releases) == 0
+    async with ClientSession() as session:
+        releases = [x async for x in ghpypi.get_artifacts(session, repository)]
+        assert len(releases) == 0
+    aresponses.assert_all_requests_matched()
 
 
-def test_create_packages_empty():
-    assert not ghpypi.create_packages([])
+@pytest.mark.asyncio
+async def test_create_packages_empty():
+    async def empty_iterator():
+        if False:
+            yield
+
+    assert not await ghpypi.create_packages(empty_iterator())
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("artifacts", "packages"),
     (
@@ -444,8 +399,12 @@ def test_create_packages_empty():
         ),
     ),
 )
-def test_create_packages(artifacts, packages):
-    assert ghpypi.create_packages(artifacts) == packages
+async def test_create_packages(artifacts, packages):
+    async def artifact_iterator():
+        for artifact in artifacts:
+            yield artifact
+
+    assert await ghpypi.create_packages(artifact_iterator()) == packages
 
 
 @pytest.mark.parametrize(
@@ -627,8 +586,8 @@ def test_sorting():
     ]
 
 
-@responses.activate
-def test_create_artifacts_no_digest():
+@pytest.mark.asyncio
+async def test_create_artifacts_no_digest(aresponses):
     assets = [
         {
             "name": "foobar-1.0.1.txt",
@@ -655,32 +614,35 @@ def test_create_artifacts_no_digest():
     asset_digest = hashlib.sha256(asset_data).hexdigest()
 
     for asset in assets:
-        responses.get(
-            asset["browser_download_url"],  # when we request this url
-            asset_data,  # return this data
+        aresponses.add(
+            "github.com",
+            asset["browser_download_url"].replace("https://github.com", ""),
+            "get",
+            aresponses.Response(body=asset_data),
         )
 
-    results = list(ghpypi.create_artifacts(assets))
-    assert results == [
-        ghpypi.Artifact(
-            filename="ghpypi-1.0.1-py3-none-any.whl",
-            url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1-py3-none-any.whl",
-            sha256=asset_digest,
-            uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
-            uploaded_by="github-actions[bot]",
-        ),
-        ghpypi.Artifact(
-            filename="ghpypi-1.0.1.tar.gz",
-            url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1.tar.gz",
-            sha256=asset_digest,
-            uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
-            uploaded_by="github-actions[bot]",
-        ),
-    ]
+    async with ClientSession() as session:
+        results = [x async for x in ghpypi.create_artifacts(session, assets)]
+        assert results == [
+            ghpypi.Artifact(
+                filename="ghpypi-1.0.1-py3-none-any.whl",
+                url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1-py3-none-any.whl",
+                sha256=asset_digest,
+                uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
+                uploaded_by="github-actions[bot]",
+            ),
+            ghpypi.Artifact(
+                filename="ghpypi-1.0.1.tar.gz",
+                url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1.tar.gz",
+                sha256=asset_digest,
+                uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
+                uploaded_by="github-actions[bot]",
+            ),
+        ]
 
 
-@responses.activate
-def test_create_artifacts_digest():
+@pytest.mark.asyncio
+async def test_create_artifacts_digest(aresponses):
     assets = [
         {
             "name": "sha256sum.txt",
@@ -709,25 +671,28 @@ def test_create_artifacts_digest():
             b"ae36bbabd6424037f716c6a78f907d6f9b058ab399a042b2c8530087beca9c3c ghpypi-1.0.1-py3-none-any.whl",
         ],
     )
-    responses.get(
-        "https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/sha256sum.txt",
-        asset_data,
+    aresponses.add(
+        "github.com",
+        "/paullockaby/ghpypi/releases/download/v1.0.1/sha256sum.txt",
+        "get",
+        aresponses.Response(body=asset_data),
     )
 
-    results = list(ghpypi.create_artifacts(assets))
-    assert results == [
-        ghpypi.Artifact(
-            filename="ghpypi-1.0.1-py3-none-any.whl",
-            url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1-py3-none-any.whl",
-            sha256="ae36bbabd6424037f716c6a78f907d6f9b058ab399a042b2c8530087beca9c3c",
-            uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
-            uploaded_by="github-actions[bot]",
-        ),
-        ghpypi.Artifact(
-            filename="ghpypi-1.0.1.tar.gz",
-            url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1.tar.gz",
-            sha256="fa6dfbe92d7b150b788da980d53f07e6e84c4079118783d5905a72cc9b636ba3",
-            uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
-            uploaded_by="github-actions[bot]",
-        ),
-    ]
+    async with ClientSession() as session:
+        results = [x async for x in ghpypi.create_artifacts(session, assets)]
+        assert results == [
+            ghpypi.Artifact(
+                filename="ghpypi-1.0.1-py3-none-any.whl",
+                url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1-py3-none-any.whl",
+                sha256="ae36bbabd6424037f716c6a78f907d6f9b058ab399a042b2c8530087beca9c3c",
+                uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
+                uploaded_by="github-actions[bot]",
+            ),
+            ghpypi.Artifact(
+                filename="ghpypi-1.0.1.tar.gz",
+                url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1.tar.gz",
+                sha256="fa6dfbe92d7b150b788da980d53f07e6e84c4079118783d5905a72cc9b636ba3",
+                uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
+                uploaded_by="github-actions[bot]",
+            ),
+        ]
