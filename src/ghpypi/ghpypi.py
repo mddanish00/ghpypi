@@ -328,7 +328,7 @@ async def get_artifacts(
         repository.name,
     )
     url = f"https://api.github.com/repos/{repository.owner}/{repository.name}/releases"
-    all_artifacts = []
+    all_releases = []
     while url:
         releases_on_page = []
         next_url = None
@@ -338,14 +338,20 @@ async def get_artifacts(
             if "next" in response.links:
                 logger.info("... found another page of results")
                 next_url = response.links["next"]["url"]
-
-        for release in releases_on_page:
-            assets = release.get("assets", [])
-            async for artifact in create_artifacts(session, assets):
-                all_artifacts.append(artifact)
-
+        all_releases.extend(releases_on_page)
         url = next_url
-    
+
+    async def collect_artifacts(assets: list[dict]) -> list[Artifact]:
+        return [artifact async for artifact in create_artifacts(session, assets)]
+
+    tasks = [collect_artifacts(release.get("assets", [])) for release in all_releases]
+
+    all_artifacts = []
+    if tasks:
+        artifact_lists = await asyncio.gather(*tasks)
+        for artifact_list in artifact_lists:
+            all_artifacts.extend(artifact_list)
+
     for artifact in all_artifacts:
         yield artifact
 
