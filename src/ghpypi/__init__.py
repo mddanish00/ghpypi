@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import logging
 import sys
 from typing import List
@@ -75,13 +76,15 @@ def main() -> None:
         stream=sys.stdout,
     )
 
-    run(
-        args.repositories,
-        args.output,
-        args.token,
-        args.token_stdin,
-        args.title,
-        args.merge_duplicates,
+    asyncio.run(
+        run(
+            args.repositories,
+            args.output,
+            args.token,
+            args.token_stdin,
+            args.title,
+            args.merge_duplicates,
+        )
     )
 
 
