@@ -6,12 +6,11 @@ authors = [{ name = "Paul Lockaby", email = "paul@paullockaby.com" }]
 requires-python = ">=3.9"
 readme = "README.md"
 dependencies = [
-    "PyGithub>=2.1.1",
+    "aiohttp>=3.9.1",
     "distlib>=0.4.0",
     "Jinja2>=3.1.2",
     "packaging>=25.0",
     "atomicwrites>=1.4.1",
-    "requests>=2.31.0",
 ]
 license-files = ["LICENSE"]
 

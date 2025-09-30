@@ -1,3 +1,4 @@
+import asyncio
 import collections
 import hashlib
 import importlib.metadata
@@ -7,14 +8,13 @@ import os.path
 import re
 import sys
 from datetime import datetime
-from typing import Any, Iterator, NamedTuple, Optional, cast
+from typing import Any, AsyncIterator, Iterator, NamedTuple, Optional, cast
 
+import aiohttp
 import distlib.wheel  # type: ignore
-import github
 import jinja2
 import packaging.utils
 import packaging.version
-import requests
 from atomicwrites import atomic_write
 
 logger = logging.getLogger(__name__)
@@ -225,9 +225,11 @@ def create_package(artifact: Artifact) -> Package:
     )
 
 
-def create_packages(artifacts: Iterator[Artifact]) -> dict[str, set[Package]]:
+async def create_packages(
+    artifacts: AsyncIterator[Artifact],
+) -> dict[str, set[Package]]:
     packages: dict[str, set[Package]] = collections.defaultdict(set)
-    for artifact in artifacts:
+    async for artifact in artifacts:
         try:
             package = create_package(artifact)
         except ValueError as e:
@@ -317,23 +319,27 @@ def get_github_token(token: Optional[str], token_stdin: bool) -> str:
 #                   'user_view_type': 'public'},
 #      'url': 'https://api.github.com/repos/plockaby/test-python/releases/assets/249839047'}
 #
-def get_artifacts(token: str, repository: Repository) -> Iterator[Artifact]:
+async def get_artifacts(
+    session: aiohttp.ClientSession, repository: Repository
+) -> AsyncIterator[Artifact]:
     logger.info(
         "fetching release artifacts for %s/%s",
         repository.owner,
         repository.name,
     )
+    url = f"https://api.github.com/repos/{repository.owner}/{repository.name}/releases"
+    async with session.get(url) as response:
+        response.raise_for_status()
+        releases = await response.json()
+        for release in releases:
+            assets = release.get("assets", [])
+            async for artifact in create_artifacts(session, assets):
+                yield artifact
 
-    gh = github.Github(auth=github.Auth.Token(token))
-    gh_repo = gh.get_repo(f"{repository.owner}/{repository.name}")
-    releases = gh_repo.get_releases()
 
-    for release in releases:
-        assets = release.raw_data.get("assets") or []
-        yield from create_artifacts(assets)
-
-
-def create_artifacts(assets: list[dict]) -> Iterator[Artifact]:
+async def create_artifacts(
+    session: aiohttp.ClientSession, assets: list[dict]
+) -> AsyncIterator[Artifact]:
     if len(assets) == 0:
         return
 
@@ -352,16 +358,16 @@ def create_artifacts(assets: list[dict]) -> Iterator[Artifact]:
             continue
 
         if name == "sha256sum.txt":
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()  # we only expect 200 responses
+            async with session.get(url) as response:
+                response.raise_for_status()  # we only expect 200 responses
 
-            # set the encoding to ascii so that we don't make the system guess
-            response.encoding = "ascii"
+                # set the encoding to ascii so that we don't make the system guess
+                text = await response.text(encoding="ascii")
 
-            # split the lines, then split each line
-            sha256sums = {
-                x[1]: x[0] for x in [line.strip().split() for line in response.text.split("\n") if len(line.strip())]
-            }
+                # split the lines, then split each line
+                sha256sums = {
+                    x[1]: x[0] for x in [line.strip().split() for line in text.split("\n") if len(line.strip())]
+                }
 
         else:
             results.append(
@@ -377,53 +383,65 @@ def create_artifacts(assets: list[dict]) -> Iterator[Artifact]:
             )
 
     for result in results:
+        # found the hash, just add it to the file
         if result["filename"] in sha256sums:
-            # found the hash, just add it to the file
-            if result["filename"] in sha256sums:
-                result["sha256"] = sha256sums[result["filename"]]
+            result["sha256"] = sha256sums[result["filename"]]
         else:
             # for any file that doesn't have a sha256 hash, download the file and calculate it
-            response = requests.get(result["url"], stream=True, timeout=30)
-            response.raise_for_status()  # we only expect 200 responses
-
-            # expecting a binary response
-            hasher = hashlib.sha256()
-            for chunk in response.iter_content(chunk_size=1024):
-                if chunk:  # filter out keep-alive new chunks
+            async with session.get(result["url"]) as response:
+                response.raise_for_status()  # we only expect 200 responses
+                
+                # expecting a binary response
+                hasher = hashlib.sha256()
+                while True:
+                    chunk = await response.content.read(1024)
+                    if not chunk:
+                        break
                     hasher.update(chunk)
-
-            result["sha256"] = hasher.hexdigest()
+                
+                result["sha256"] = hasher.hexdigest()
 
         yield Artifact(**result)
 
 
-def run(
+async def process_repository(
+    session: aiohttp.ClientSession, repository: Repository
+) -> dict[str, set[Package]]:
+    """Process a single repository and return its packages."""
+    artifacts = get_artifacts(session, repository)
+    return await create_packages(artifacts)
+
+
+async def run(
     repositories: str,
     output: str,
     token: str,
     token_stdin: bool,
     title: Optional[str] = None,
-    merge_duplicates: Optional[bool] = None,
+    merge_duplicates: Optional[bool] = False,
 ) -> None:
-    if merge_duplicates is None:
-        merge_duplicates = False
-
     packages = {}
     token = get_github_token(token, token_stdin)
-    for repository in load_repositories(repositories):
-        # this creates a dictionary of sets
-        # the key is the name of the package
-        # the value is a set of packages
-        data = create_packages(get_artifacts(token, repository))
 
-        for key, value in data.items():
-            logger.info("found %d files for package %s", len(value), key)
-            if merge_duplicates:
-                # if this key is already in the dict then merge the packages
-                packages[key] = packages.get(key, set()) | value
-            else:
-                # if this key is already in the dict then replace it
-                packages[key] = value
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    async with aiohttp.ClientSession(headers=headers) as session:
+        tasks = [
+            process_repository(session, repo)
+            for repo in load_repositories(repositories)
+        ]
+        processed_packages = await asyncio.gather(*tasks)
+        for package in processed_packages:
+            for key, value in package.items():
+                logger.info("found %d files for package %s", len(value), key)
+                if merge_duplicates:
+                    # if this key is already in the dict then merge the packages
+                    packages[key] = packages.get(key, set()) | value
+                else:
+                    # if this key is already in the dict then replace it
+                    packages[key] = value
 
     # set a default title
     if title is None:
