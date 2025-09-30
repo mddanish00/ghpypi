@@ -436,12 +436,25 @@ async def run(
         for package in processed_packages:
             for key, value in package.items():
                 logger.info("found %d files for package %s", len(value), key)
-                if merge_duplicates:
-                    # if this key is already in the dict then merge the packages
-                    packages[key] = packages.get(key, set()) | value
-                else:
-                    # if this key is already in the dict then replace it
+                # If not merging, or if the package is new, just assign it.
+                # The last repository processed will win in case of non-merging duplicates.
+                if not merge_duplicates or key not in packages:
                     packages[key] = value
+                else:
+                    # Merge with existing packages.
+                    # Create a lookup of existing packages by filename for efficient collision detection.
+                    existing_packages_by_filename = {pkg.filename: pkg for pkg in packages[key]}
+
+                    for new_pkg in value:  # 'value' is the set of packages from the current repository
+                        if new_pkg.filename in existing_packages_by_filename:
+                            # A file with the same name exists. The new package from the later
+                            # repository replaces the old one.
+                            old_pkg = existing_packages_by_filename[new_pkg.filename]
+                            packages[key].remove(old_pkg)
+
+                        # Add the new package. This adds it if it's new, or replaces the old one
+                        # which was just removed.
+                        packages[key].add(new_pkg)
 
     # set a default title
     if title is None:
