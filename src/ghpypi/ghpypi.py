@@ -328,13 +328,26 @@ async def get_artifacts(
         repository.name,
     )
     url = f"https://api.github.com/repos/{repository.owner}/{repository.name}/releases"
-    async with session.get(url) as response:
-        response.raise_for_status()
-        releases = await response.json()
-        for release in releases:
+    all_artifacts = []
+    while url:
+        releases_on_page = []
+        next_url = None
+        async with session.get(url) as response:
+            response.raise_for_status()
+            releases_on_page = await response.json()
+            if "next" in response.links:
+                logger.info("... found another page of results")
+                next_url = response.links["next"]["url"]
+
+        for release in releases_on_page:
             assets = release.get("assets", [])
             async for artifact in create_artifacts(session, assets):
-                yield artifact
+                all_artifacts.append(artifact)
+
+        url = next_url
+    
+    for artifact in all_artifacts:
+        yield artifact
 
 
 async def create_artifacts(
