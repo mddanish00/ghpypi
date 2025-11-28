@@ -26,6 +26,8 @@ dev = [
     "types-requests>=2.31.0.8",
     "types-atomicwrites>=1.4.5.1",
     "responses>=0.25.0",
+    "pytest-asyncio>=1.2.0",
+    "aresponses>=3.0.0",
 ]
 
 [tool.hatch.build.targets.sdist]
