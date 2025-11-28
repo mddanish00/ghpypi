@@ -594,18 +594,21 @@ async def test_create_artifacts_no_digest(aresponses):
             "browser_download_url": "https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/foobar-1.0.1.whl",
             "updated_at": "2021-12-25T06:22:19Z",
             "uploader": {"login": "github-actions[bot]"},
+            "digest": None,
         },
         {
             "name": "ghpypi-1.0.1-py3-none-any.whl",
             "browser_download_url": "https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1-py3-none-any.whl",
             "updated_at": "2021-12-25T06:22:19Z",
             "uploader": {"login": "github-actions[bot]"},
+            "digest": None,
         },
         {
             "name": "ghpypi-1.0.1.tar.gz",
             "browser_download_url": "https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1.tar.gz",
             "updated_at": "2021-12-25T06:22:19Z",
             "uploader": {"login": "github-actions[bot]"},
+            "digest": None,
         },
     ]
 
@@ -649,18 +652,21 @@ async def test_create_artifacts_digest(aresponses):
             "browser_download_url": "https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/sha256sum.txt",
             "updated_at": "2021-12-25T06:22:19Z",
             "uploader": {"login": "github-actions[bot]"},
+            "digest": None,
         },
         {
             "name": "ghpypi-1.0.1-py3-none-any.whl",
             "browser_download_url": "https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1-py3-none-any.whl",
             "updated_at": "2021-12-25T06:22:19Z",
             "uploader": {"login": "github-actions[bot]"},
+            "digest": None,
         },
         {
             "name": "ghpypi-1.0.1.tar.gz",
             "browser_download_url": "https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1.tar.gz",
             "updated_at": "2021-12-25T06:22:19Z",
             "uploader": {"login": "github-actions[bot]"},
+            "digest": None,
         },
     ]
 
@@ -677,6 +683,45 @@ async def test_create_artifacts_digest(aresponses):
         "get",
         aresponses.Response(body=asset_data),
     )
+
+    async with ClientSession() as session:
+        results = [x async for x in ghpypi.create_artifacts(session, assets)]
+        assert results == [
+            ghpypi.Artifact(
+                filename="ghpypi-1.0.1-py3-none-any.whl",
+                url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1-py3-none-any.whl",
+                sha256="ae36bbabd6424037f716c6a78f907d6f9b058ab399a042b2c8530087beca9c3c",
+                uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
+                uploaded_by="github-actions[bot]",
+            ),
+            ghpypi.Artifact(
+                filename="ghpypi-1.0.1.tar.gz",
+                url="https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1.tar.gz",
+                sha256="fa6dfbe92d7b150b788da980d53f07e6e84c4079118783d5905a72cc9b636ba3",
+                uploaded_at=datetime(2021, 12, 25, 6, 22, 19),
+                uploaded_by="github-actions[bot]",
+            ),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_create_artifacts_github_digest():
+    assets = [
+        {
+            "name": "ghpypi-1.0.1-py3-none-any.whl",
+            "browser_download_url": "https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1-py3-none-any.whl",
+            "updated_at": "2021-12-25T06:22:19Z",
+            "uploader": {"login": "github-actions[bot]"},
+            "digest": "sha256:ae36bbabd6424037f716c6a78f907d6f9b058ab399a042b2c8530087beca9c3c",
+        },
+        {
+            "name": "ghpypi-1.0.1.tar.gz",
+            "browser_download_url": "https://github.com/paullockaby/ghpypi/releases/download/v1.0.1/ghpypi-1.0.1.tar.gz",
+            "updated_at": "2021-12-25T06:22:19Z",
+            "uploader": {"login": "github-actions[bot]"},
+            "digest": "sha256:fa6dfbe92d7b150b788da980d53f07e6e84c4079118783d5905a72cc9b636ba3",
+        },
+    ]
 
     async with ClientSession() as session:
         results = [x async for x in ghpypi.create_artifacts(session, assets)]
