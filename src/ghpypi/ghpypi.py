@@ -393,7 +393,7 @@ async def create_artifacts(
                 {
                     "filename": name,
                     "url": url,
-                    "sha256": None,
+                    "sha256": asset["digest"].split(":")[1] if asset["digest"] is not None and asset["digest"].startswith("sha256:") else None,
                     "uploaded_at": datetime.fromisoformat(
                         asset["updated_at"].rstrip("Z"),
                     ),
@@ -406,19 +406,20 @@ async def create_artifacts(
         if result["filename"] in sha256sums:
             result["sha256"] = sha256sums[result["filename"]]
         else:
-            # for any file that doesn't have a sha256 hash, download the file and calculate it
-            async with session.get(result["url"]) as response:
-                response.raise_for_status()  # we only expect 200 responses
-                
-                # expecting a binary response
-                hasher = hashlib.sha256()
-                while True:
-                    chunk = await response.content.read(1024)
-                    if not chunk:
-                        break
-                    hasher.update(chunk)
-                
-                result["sha256"] = hasher.hexdigest()
+            if result["sha256"] is None:
+                # for any file that doesn't have a sha256 hash, download the file and calculate it
+                async with session.get(result["url"]) as response:
+                    response.raise_for_status()  # we only expect 200 responses
+                    
+                    # expecting a binary response
+                    hasher = hashlib.sha256()
+                    while True:
+                        chunk = await response.content.read(1024)
+                        if not chunk:
+                            break
+                        hasher.update(chunk)
+                    
+                    result["sha256"] = hasher.hexdigest()
 
         yield Artifact(**result)
 
